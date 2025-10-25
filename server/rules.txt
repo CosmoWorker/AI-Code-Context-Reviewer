@@ -1,0 +1,22 @@
+AI Code Review General Ruleset
+
+1. Code Structure 
+- Follow language-specific styles guides.
+- Avoid overly deeply nested loops or functions. Helper functions can be utilised for refactors.
+- Ensure consistent naming (snake_case for functions, CamelCase for classes or language-dependent).
+- Functions should serve a single purpose & do one thing.
+
+2. Readibility & Naming rules
+- Variables should be named descriptive(explanatory) & unambiguous in nature.
+- Avoid magic numbers & instead be named with constants.
+- Proper Identation is important & usage of whitespace to associate related things.
+- Group related logic & modules logically.
+
+3. Comments Rules
+- Don't add obvious noise. Avoid comment out code, just remove.
+- Public functions/class preferably can include a docstring describing it self. 
+
+4. Tests & Security 
+- Sanitize & validate all inputs; No raw sql queries without parameterization.
+- Codebase must not contain any potential hardcoded API keys, secrets & tokens.
+- Tests (like unit tests, etc) must run determinstically & should independent & repeatable.
