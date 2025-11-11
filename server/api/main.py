@@ -74,3 +74,5 @@ def handle_pr_event(payload: dict):
 
     return {"msg": "Check Done"}
 
+if __name__ == "__main__":
+    main()
