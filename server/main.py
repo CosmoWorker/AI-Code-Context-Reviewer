@@ -16,6 +16,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 github_token = os.getenv("GITHUB_PAT_TOKEN")
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
+
 @app.get("/")
 def main():
     return {"msg": "Hello from code reviewer server"}
@@ -32,9 +33,11 @@ Abstract Response object
 }
 """
 
+
 @app.post("/webhook")  # endpoint for gh webhhook
 def handle_pr_event(payload: dict):
     pr_response = payload["pull_request"]
+    logger.info("Received Github PR event")
     if pr_response["state"] == "open":
         try:
             logger.info("Reading Rules File")
@@ -56,11 +59,13 @@ def handle_pr_event(payload: dict):
             "Authorization": f"Bearer {github_token}",
             "X-GitHub-Api-Version": "2022-11-28",
         }
+        logger.info("Sending a diff request...")
         diffs = requests.get(pr_response["diff_url"], headers=headers).text
         user_prompt = f"""
             Diff:
             {diffs}
         """
+        logger.info("Calling groq API model...")
         chat_completion = client.chat.completions.create(
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -69,10 +74,13 @@ def handle_pr_event(payload: dict):
             model="openai/gpt-oss-120b",
         )
         response = chat_completion.choices[0].message.content
+        logger.info("Response received from LLM")
         data = {"body": f"""{response}"""}
         requests.post(pr_response["comments_url"], json=data, headers=headers)
+        logger.info("Posting comment for the PR's diff.")
 
     return {"msg": "Check Done"}
+
 
 if __name__ == "__main__":
     main()
