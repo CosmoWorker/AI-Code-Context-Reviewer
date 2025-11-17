@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 import logging
 import requests
+import base64
+import re
 from dotenv import load_dotenv
 from groq import Groq
 
@@ -23,7 +25,7 @@ def main():
 
 
 """
-Abstract Response object 
+Webhook Abstract Response object for pull requests
 {
   "action": "",
   "number": "",
@@ -32,6 +34,110 @@ Abstract Response object
   "sender": {}
 }
 """
+headers = {
+    "Authorization": f"Bearer {github_token}",
+    "X-GitHub-Api-Version": "2022-11-28",
+}
+
+def extract_old_filecontent_diff(diffs: str, base_sha: str) -> str:
+    logger.info("Extracting filenames from diffs...")
+    diffs_txt = diffs.split("diff --git")
+    diff_filepaths = []
+    for i in diffs_txt[1:]:
+        old_fileline = next(
+            (line for line in i.splitlines() if line.startswith("--- ")), None
+        )
+        if not old_fileline or old_fileline.startswith("--- /dev/null"):
+            continue
+
+        diff_filepaths.append(old_fileline.replace("--- a/", "").strip())
+    logger.info("Old Filenames extracted from BASE")
+    base_filecontent = """"""
+    for path in diff_filepaths:
+        contents_url = f"https://api.github.com/repos/CosmoWorker/AI-Code-Context-Reviewer/contents/{path}?ref={base_sha}"
+        content_obj = requests.get(contents_url, headers=headers).json()
+        base_filecontent += content_obj["path"] + "\n"
+        base_filecontent += base64.b64decode(content_obj["content"]) + "\n"
+    logger.info("base files content decoded")
+    return base_filecontent
+
+
+def hunks_per_diff(diffs: str):
+    diffs_lines = diffs.splitlines()
+
+    file_hunks = {}  # {"server/a.py": {"Hunk 1":{'old': (10, 2), 'new': (16,7)}, ...}}
+    current_file = None
+    hunk_index = 1
+
+    # regex to get filenames and hunk lines
+    file_regex = re.compile(r"diff --git a/(.+?) b/(.+)")
+    hunk_regex = re.compile(r"@@\s*-\s*(\d+)(?:,(\d+))?\s+\+\s*(\d+)(?:,(\d+))?\s*@@")
+
+    i = 0
+    while i < len(diffs_lines):
+        line = diffs_lines[i]
+
+        m = file_regex.match(line)
+        if m:
+            current_file = m.group(1)  # always use "a/<file>"
+            file_hunks[current_file] = {}
+            hunk_index = 1
+            i += 1
+            continue
+
+        if line.startswith("@@") and current_file:
+            diffs_lines.insert(i, f"Hunk {hunk_index}: ")
+
+            m = hunk_regex.match(line)
+            if m:
+                old_start = int(m.group(1))
+                old_count = int(m.group(2) or 1)
+                new_start = int(m.group(3))
+                new_count = int(m.group(4) or 1)
+
+                file_hunks[current_file][f"Hunk {hunk_index}"] = {
+                    "old": (old_start, old_count),
+                    "new": (new_start, new_count),
+                }
+
+            hunk_index += 1
+            i += 1  # skip inserted line
+        i += 1
+
+    return "\n".join(diffs_lines), file_hunks
+
+
+"""
+{
+    "server/file.py":{
+        1 : {"review":True, "text":"..."},
+        2 : {"review": False, "text": ""},
+    },
+}
+"""
+
+
+def parse_llm_response(res_txt: str) -> dict:
+    result = {}
+    curr_file = curr_hunk = None
+    for line in res_txt.splitlines():
+        line = line.strip()
+        if line.startswith("####"):
+            curr_file = line[5:].strip()
+            result[curr_file] = {}
+        elif line.startswith("Hunk"):
+            m = re.match(r"Hunk (\d+) Review: (Yes|No)", line)
+            if m:
+                hunk_num = int(m.group(1))
+                needs_review = m.group(2) == "Yes"
+                result[curr_file][hunk_num] = {"review": needs_review, "text": ""}
+                curr_hunk = hunk_num
+
+        elif line.startswith("Review"):
+            m = re.match(r'Review:\s*"(.*)"', line)
+            if m:
+                result[curr_file][curr_hunk]["text"] = m.group(1)
+    return result
 
 
 @app.post("/webhook")  # endpoint for gh webhhook
@@ -46,24 +152,42 @@ def handle_pr_event(payload: dict):
         except Exception as e:
             logger.error("Error reading  rules file: ", e)
         system_prompt = f"""
-            You are an AI Code Reviewer. You should Review the git diff provided based on the ruleset & other facets like issues description (if provided), etc.
+            You are an Professional Code Reviewer. You review/comment the git diff provided based on the ruleset & other facets like issues description (if provided), etc.
             Rules: 
             {ruleset}
-            Group the issues by file & clearly format them as per file with description if necessary.
-            Do not suggest unrelated issues nor add add any fluff. 
+            Group the issues by file & clearly format them. The context provided from base files is only for cross referencing the diffs to avoid inaccurate comments like unused imports, no instance, etc.
+            Do not suggest unrelated issues nor add add any fluff & be concise logically with comment/review. 
             Format:
-            ### <Title (with Issue if any)>
             #### <filename>
+            Hunk 1 Review: Yes/No (if req)
+            Review: "review content"
+            Hunk 2 Review: No 
+            Review: ""
+            .
+            .
+            .
+            #### <filename>
+            Hunk 1 Review: Yes
+            Review: "review content"
+            Hunk 2 Review: No
+            Review: ""
+            .
+            .
+            .
         """
-        headers = {
-            "Authorization": f"Bearer {github_token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
         logger.info("Sending a diff request...")
         diffs = requests.get(pr_response["diff_url"], headers=headers).text
+        logger.info("Received diff")
+        base_commit_filecontent = extract_old_filecontent_diff(
+            diffs, pr_response["base"]["sha"]
+        )
+        logger.info("Base commit file received")
+        hunks_diff = hunks_per_diff(diffs)
         user_prompt = f"""
+            Context(Base commit Files):
+            {base_commit_filecontent}
             Diff:
-            {diffs}
+            {hunks_diff[0]}
         """
         logger.info("Calling groq API model...")
         chat_completion = client.chat.completions.create(
@@ -79,8 +203,65 @@ def handle_pr_event(payload: dict):
         requests.post(pr_response["comments_url"], json=data, headers=headers)
         logger.info("Posting comment for the PR's diff.")
 
+        parsed_response = parse_llm_response(response)
+        hunks = hunks_diff[1]
+        commit_id = pr_response["head"]["sha"]
+        for filename, hunks_data in parsed_response.items():
+            for hunks_num, info in hunks_data.items():
+                if not info["review"]:
+                    continue
+                text = info["text"]
+                old_start, old_count = hunks[filename][f"Hunk {hunks_num}"]["old"]
+                new_start, new_count = hunks[filename][f"Hunk {hunks_num}"]["new"]
+
+                if new_count > 0:
+                    side = "RIGHT"
+                    start_line = new_start
+                    end_line = new_start + new_count - 1
+                else:
+                    side = "LEFT"
+                    start_line = old_start
+                    end_line = old_start + old_count - 1
+
+                payload = {
+                    "body": text,
+                    "commit_id": commit_id,
+                    "path": filename,
+                    "start_side": side,
+                    "start_line": start_line,
+                    "line": end_line,
+                    "side": side,
+                }
+                requests.post(
+                    pr_response["review_comments_url"], json=payload, headers=headers
+                )
+
     return {"msg": "Check Done"}
 
 
 if __name__ == "__main__":
     main()
+
+
+"""
+You are an Code Summarizer. Based on the diffs and context provided by the Pull request with additional details,
+you summarize what the PR is about with formatted description if necessary. 
+Based on additional context such as code structure & repository file tree, you generate a Mermaid diagram code which 
+aligns with it. Some example format: (Can be modified as per summarization need)
+### Title 
+#### Concise Description 
+Example Format for mermaid diagram:
+```mermaid
+flowchart TD
+    A[Christmas] -->|Get money| B(Go shopping)
+    B --> C{Let me think}
+    C -->|One| D[Laptop]
+    C -->|Two| E[iPhone]
+    C -->|Three| F[fa:fa-car Car]
+```
+
+#### <imp filename> : Concise logical changes made
+.
+.
+.
+"""
