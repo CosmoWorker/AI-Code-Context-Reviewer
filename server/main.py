@@ -39,6 +39,7 @@ headers = {
     "X-GitHub-Api-Version": "2022-11-28",
 }
 
+
 def extract_old_filecontent_diff(diffs: str, base_sha: str) -> str:
     logger.info("Extracting filenames from diffs...")
     diffs_txt = diffs.split("diff --git")
@@ -156,11 +157,11 @@ def handle_pr_event(payload: dict):
             Rules: 
             {ruleset}
             Group the issues by file & clearly format them. The context provided from base files is only for cross referencing the diffs to avoid inaccurate comments like unused imports, no instance, etc.
-            Do not suggest unrelated issues nor add add any fluff & be concise logically with comment/review. 
+            Do not suggest unrelated issues nor add add any fluff & be concise logically with comment/review with minor suggestion (with example) only if required. 
             Format:
             #### <filename>
             Hunk 1 Review: Yes/No (if req)
-            Review: "review content"
+            Review: <review content>
             Hunk 2 Review: No 
             Review: ""
             .
@@ -168,7 +169,7 @@ def handle_pr_event(payload: dict):
             .
             #### <filename>
             Hunk 1 Review: Yes
-            Review: "review content"
+            Review: <review content>
             Hunk 2 Review: No
             Review: ""
             .
@@ -199,11 +200,9 @@ def handle_pr_event(payload: dict):
         )
         response = chat_completion.choices[0].message.content
         logger.info("Response received from LLM")
-        data = {"body": f"""{response}"""}
-        requests.post(pr_response["comments_url"], json=data, headers=headers)
-        logger.info("Posting comment for the PR's diff.")
 
         parsed_response = parse_llm_response(response)
+        logger.info("Parsed LLM response for review body content")
         hunks = hunks_diff[1]
         commit_id = pr_response["head"]["sha"]
         for filename, hunks_data in parsed_response.items():
@@ -232,11 +231,17 @@ def handle_pr_event(payload: dict):
                     "line": end_line,
                     "side": side,
                 }
+                logger.info(f"Posting comment for {filename}'s PR diff.")
                 requests.post(
                     pr_response["review_comments_url"], json=payload, headers=headers
                 )
 
-    return {"msg": "Check Done"}
+    return {"msg": "Review Check Done"}
+
+
+# @app.post("/webhook-comment")  # some other endpoint name
+# def handle_issue_comment_event():
+#     pass
 
 
 if __name__ == "__main__":
@@ -245,11 +250,17 @@ if __name__ == "__main__":
 
 """
 You are an Code Summarizer. Based on the diffs and context provided by the Pull request with additional details,
-you summarize what the PR is about with formatted description if necessary. 
-Based on additional context such as code structure & repository file tree, you generate a Mermaid diagram code which 
-aligns with it. Some example format: (Can be modified as per summarization need)
+you summarize what the PR is about with formatted description if necessary. Changes would be in a table format & related files can be grouped.
+Based on additional context such as code structure & repository file tree, you generate a Mermaid diagram code which aligns with it only if codebase structure is provided or is accurately understood.
+Some example format: (Can be modified as per summarization need)
 ### Title 
-#### Concise Description 
+<Concise Description>
+#### Changes
+ Files     | Summary 
+ --------- | ---------
+ <`files`> | <content>
+ <`files`> | <content>
+
 Example Format for mermaid diagram:
 ```mermaid
 flowchart TD
@@ -259,9 +270,19 @@ flowchart TD
     C -->|Two| E[iPhone]
     C -->|Three| F[fa:fa-car Car]
 ```
-
-#### <imp filename> : Concise logical changes made
-.
-.
-.
 """
+
+
+'''
+    chat_completion = client.chat.completions.create(
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        model="openai/gpt-oss-120b", # other models like -> llama-3.3-70b-versatile
+    )
+    response = chat_completion.choices[0].message.content
+    logger.info("Response received from LLM")
+    data = {"body": f"""{response}"""}
+    requests.post(pr_response["comments_url"], json=data, headers=headers)
+'''
