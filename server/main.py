@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+# from fastapi.middleware.cors import CORSMiddleware
 import os
 import logging
 import requests
@@ -10,7 +10,7 @@ from groq import Groq
 
 load_dotenv()
 app = FastAPI()
-app.add_middleware(CORSMiddleware)
+# app.add_middleware(CORSMiddleware) # not required 
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -184,6 +184,7 @@ def handle_pr_event(payload: dict):
         )
         logger.info("Base commit file received")
         hunks_diff = hunks_per_diff(diffs)
+        logger.info("formatting some hunks")
         user_prompt = f"""
             Context(Base commit Files):
             {base_commit_filecontent}
@@ -235,13 +236,8 @@ def handle_pr_event(payload: dict):
                 requests.post(
                     pr_response["review_comments_url"], json=payload, headers=headers
                 )
-
+                logger.info("Posted comment....")
     return {"msg": "Review Check Done"}
-
-
-# @app.post("/webhook-comment")  # some other endpoint name
-# def handle_issue_comment_event():
-#     pass
 
 
 if __name__ == "__main__":
