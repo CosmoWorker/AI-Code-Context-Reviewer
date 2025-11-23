@@ -58,7 +58,7 @@ def extract_old_filecontent_diff(diffs: str, base_sha: str) -> str:
         contents_url = f"https://api.github.com/repos/CosmoWorker/AI-Code-Context-Reviewer/contents/{path}?ref={base_sha}"
         content_obj = requests.get(contents_url, headers=headers).json()
         base_filecontent += content_obj["path"] + "\n"
-        base_filecontent += base64.b64decode(content_obj["content"]) + "\n"
+        base_filecontent += base64.b64decode(content_obj["content"]).decode() + "\n"
     logger.info("base files content decoded")
     return base_filecontent
 
