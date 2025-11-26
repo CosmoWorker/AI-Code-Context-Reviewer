@@ -157,7 +157,7 @@ def handle_pr_event(payload: dict):
             Rules: 
             {ruleset}
             Group the issues by file & clearly format them. The context provided from base files is only for cross referencing the diffs to avoid inaccurate comments like unused imports, no instance, etc.
-            Do not suggest unrelated issues nor add add any fluff & be concise logically with comment/review with minor suggestion (with example) only if required. 
+            Do not suggest unrelated issues nor add add any fluff & be concise logically with comment/review with minor suggestion (with example) only if required. Provide review/comment for atleast one.
             Format:
             #### <filename>
             Hunk 1 Review: Yes/No (if req)
@@ -184,6 +184,7 @@ def handle_pr_event(payload: dict):
         )
         logger.info("Base commit file received")
         hunks_diff = hunks_per_diff(diffs)
+        logger.info(f"Hunks diff response: {hunks_diff}")
         user_prompt = f"""
             Context(Base commit Files):
             {base_commit_filecontent}
@@ -203,11 +204,13 @@ def handle_pr_event(payload: dict):
 
         parsed_response = parse_llm_response(response)
         logger.info("Parsed LLM response for review body content")
+        logger.info(f"Parsed response: {parsed_response}")
         hunks = hunks_diff[1]
         commit_id = pr_response["head"]["sha"]
         for filename, hunks_data in parsed_response.items():
             for hunks_num, info in hunks_data.items():
                 if not info["review"]:
+                    logger.info(f"No review/comment for {filename}")
                     continue
                 text = info["text"]
                 old_start, old_count = hunks[filename][f"Hunk {hunks_num}"]["old"]
