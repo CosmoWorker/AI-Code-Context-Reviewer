@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Header
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import logging
@@ -127,7 +127,7 @@ def parse_llm_response(res_txt: str) -> dict:
             curr_file = line[5:].strip()
             result[curr_file] = {}
         elif line.startswith("Hunk"):
-            m = re.match(r"Hunk (\d+) Review: (Yes|No)", line)
+            m = re.match(r"Hunk\s+(\d+)\s*Review:\s*(Yes|No)", line, re.IGNORECASE)
             if m:
                 hunk_num = int(m.group(1))
                 needs_review = m.group(2) == "Yes"
@@ -142,7 +142,10 @@ def parse_llm_response(res_txt: str) -> dict:
 
 
 @app.post("/webhook")  # endpoint for gh webhhook
-def handle_pr_event(payload: dict):
+def handle_pr_event(payload: dict, x_github_event: str = Header(None)):
+    if x_github_event != "pull_request":
+        logger.info(f"Ignoring event: {x_github_event}")
+        return {"msg": "Ignored- not a PR event"}
     pr_response = payload["pull_request"]
     logger.info("Received Github PR event")
     if pr_response["state"] == "open":
@@ -158,24 +161,20 @@ def handle_pr_event(payload: dict):
             {ruleset}
             Group the issues by file & clearly format them. The context provided from base files is only for cross referencing the diffs to avoid inaccurate comments like unused imports, no instance, etc.
             Do not suggest unrelated issues nor add add any fluff & be concise logically with comment/review with minor suggestion (with example) only if required. Provide review/comment for atleast one.
-            Format:
+            STRICT FORMAT RULES — MUST FOLLOW EXACTLY:
+            For each file:
             #### <filename>
-            Hunk 1 Review: Yes/No (if req)
-            Review: <review content>
-            Hunk 2 Review: No 
-            Review: ""
-            .
-            .
-            .
-            #### <filename>
-            Hunk 1 Review: Yes
-            Review: <review content>
-            Hunk 2 Review: No
-            Review: ""
-            .
-            .
-            .
+            Hunk <number> Review: Yes|No
+            Review: "<text>"
+
+            - DO NOT skip any hunk.
+            - DO NOT change capitalization & add extra markers.
+            - DO NOT include explanation outside the format or the Hunks.
+            - If no review needed, write:
+                Hunk <n> Review: No
+                Review: ""
         """
+
         logger.info("Sending a diff request...")
         diffs = requests.get(pr_response["diff_url"], headers=headers).text
         logger.info("Received diff")
@@ -200,7 +199,7 @@ def handle_pr_event(payload: dict):
             model="openai/gpt-oss-120b",
         )
         response = chat_completion.choices[0].message.content
-        logger.info("Response received from LLM")
+        logger.info(f"Response received from LLM: {response}")
 
         parsed_response = parse_llm_response(response)
         logger.info("Parsed LLM response for review body content")
@@ -209,6 +208,11 @@ def handle_pr_event(payload: dict):
         commit_id = pr_response["head"]["sha"]
         for filename, hunks_data in parsed_response.items():
             for hunks_num, info in hunks_data.items():
+
+                if filename not in hunks:
+                    logger.info(f"Filename {filename} not found in parsed diff hunks..")
+                    continue
+
                 if not info["review"]:
                     logger.info(f"No review/comment for {filename}")
                     continue
@@ -239,7 +243,7 @@ def handle_pr_event(payload: dict):
                     pr_response["review_comments_url"], json=payload, headers=headers
                 )
 
-    return {"msg": "Review Check Done"}
+        return {"msg": "Review Check Done"}
 
 
 # @app.post("/webhook-comment")  # some other endpoint name
