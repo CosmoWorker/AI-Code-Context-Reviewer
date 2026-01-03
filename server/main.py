@@ -146,33 +146,137 @@ def handle_pr_event(payload: dict, x_github_event: str = Header(None)):
     if x_github_event != "pull_request":
         logger.info(f"Ignoring event: {x_github_event}")
         return {"msg": "Ignored- not a PR event"}
+
+    if x_github_event == "issue_comment":
+        comment_response = payload["issue_comment"]["issue"]
+        if (
+            comment_response["pull_request"]
+            and comment_response["comment"] == "/review"
+        ):
+            pr_url = comment_response["pull_request"]["url"]
+            pr_info = requests.get(pr_url, headers=headers)
+            if pr_info["state"] == "open":
+                try:
+                    logger.info("Reading Rules File")
+                    with open("rules.txt", "r") as f:
+                        ruleset = f.read()
+                except Exception as e:
+                    logger.error("Error reading  rules file: ", e)
+
+                system_prompt = f"""
+                    You are an Professional Code Reviewer. You review/comment the git diff provided based on the ruleset & other facets like issues description (if provided), etc.
+                    Rules: 
+                    {ruleset}
+                    Group the issues by file & clearly format them. The context provided from base files is only for cross referencing the diffs to avoid inaccurate comments like unused imports, no instance, etc.
+                    Do not suggest unrelated issues nor add add any fluff & be concise logically with comment/review with minor suggestion (with example) only if required. Provide review/comment for atleast one.
+                    STRICT FORMAT RULES — MUST FOLLOW EXACTLY:
+                    For each file:
+                    #### <filename>
+                    Hunk <number> Review: Yes|No
+                    Review: "<text>"
+                    - DO NOT skip any hunk.
+                    - DO NOT change capitalization & add extra markers.
+                    - DO NOT include explanation outside the format or the Hunks.
+                    - If no review needed, write:
+                        Hunk <n> Review: No
+                        Review: ""
+                """
+                logger.info("Sending a diff request...")
+                diffs = requests.get(pr_info["diff_url"], headers=headers).text
+                logger.info("Received diff")
+                base_commit_filecontent = extract_old_filecontent_diff(
+                    diffs, pr_info["base"]["sha"]
+                )
+                logger.info("Base commit file received")
+                hunks_diff = hunks_per_diff(diffs)
+                logger.info(f"HUnks diff response: {hunks_diff}")
+                user_prompt = f"""
+                    Context(Base commit Files):
+                    {base_commit_filecontent}
+                    Diff:
+                    {hunks_diff[0]}
+                """
+                logger.info("Calling groq API model...")
+                chat_completion = client.chat.completions.create(
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    model="openai/gpt-oss-120b",
+                )
+            response = chat_completion.choices[0].message.content
+            logger.info(f"Response received from LLM: {response}")
+
+            parsed_response = parse_llm_response(response)
+            logger.info("Parsed LLM response for review body content")
+            logger.info(f"Parsed response: {parsed_response}")
+            hunks = hunks_diff[1]
+            commit_id = pr_info["head"]["sha"]
+            for filename, hunks_data in parsed_response.items():
+                for hunks_num, info in hunks_data.items():
+                    if filename not in hunks:
+                        logger.info(
+                            f"Filename {filename} not found in parsed diff hunks.."
+                        )
+                        continue
+
+                    if not info["review"]:
+                        logger.info(f"No review/comment for {filename}")
+                        continue
+                    text = info["text"]
+                    old_start, old_count = hunks[filename][f"Hunk {hunks_num}"]["old"]
+                    new_start, new_count = hunks[filename][f"Hunk {hunks_num}"]["new"]
+
+                    if new_count > 0:
+                        side = "RIGHT"
+                        start_line = new_start
+                        end_line = new_start + new_count - 1
+                    else:
+                        side = "LEFT"
+                        start_line = old_start
+                        end_line = old_start + old_count - 1
+
+                    payload = {
+                        "body": text,
+                        "commit_id": commit_id,
+                        "path": filename,
+                        "start_side": side,
+                        "start_line": start_line,
+                        "line": end_line,
+                        "side": side,
+                    }
+                    logger.info(f"Posting comment for {filename}'s PR diff.")
+                    requests.post(
+                        pr_info["review_comments_url"], json=payload, headers=headers
+                    )
+
+            return {"msg": "Review Check Done"}
+
     pr_response = payload["pull_request"]
     logger.info("Received Github PR event")
-    if pr_response["state"] == "open":
-        try:
-            logger.info("Reading Rules File")
-            with open("rules.txt", "r") as f:
-                ruleset = f.read()
-        except Exception as e:
-            logger.error("Error reading  rules file: ", e)
-        system_prompt = f"""
-            You are an Professional Code Reviewer. You review/comment the git diff provided based on the ruleset & other facets like issues description (if provided), etc.
-            Rules: 
-            {ruleset}
-            Group the issues by file & clearly format them. The context provided from base files is only for cross referencing the diffs to avoid inaccurate comments like unused imports, no instance, etc.
-            Do not suggest unrelated issues nor add add any fluff & be concise logically with comment/review with minor suggestion (with example) only if required. Provide review/comment for atleast one.
-            STRICT FORMAT RULES — MUST FOLLOW EXACTLY:
-            For each file:
-            #### <filename>
-            Hunk <number> Review: Yes|No
-            Review: "<text>"
 
-            - DO NOT skip any hunk.
-            - DO NOT change capitalization & add extra markers.
-            - DO NOT include explanation outside the format or the Hunks.
-            - If no review needed, write:
-                Hunk <n> Review: No
-                Review: ""
+    if pr_response["state"] == "open":
+        system_prompt = """You are an Code Summarizer to help Maintainers/Reviewers. Based on the diffs and context provided by the Pull request with additional details,
+            you summarize what the PR is about with formatted description if necessary. Changes would be in a table format & related files can be grouped.
+            Based on additional context such as code structure & repository file tree, you generate a Mermaid diagram code which aligns with it only if codebase structure is provided or is accurately understood.
+            Some example format: (Can be modified as per summarization need)
+            ### Title 
+            <Concise Description>
+            #### Changes
+            Files     | Summary 
+            --------- | ---------
+            <`files`> | <content>
+            <`files`> | <content>
+
+            Example Format for mermaid diagram:
+            ```mermaid
+            flowchart TD
+                A[Christmas] -->|Get money| B(Go shopping)
+                B --> C{Let me think}
+                C -->|One| D[Laptop]
+                C -->|Two| E[iPhone]
+                C -->|Three| F[fa:fa-car Car]
+            ```
         """
 
         logger.info("Sending a diff request...")
@@ -190,7 +294,6 @@ def handle_pr_event(payload: dict, x_github_event: str = Header(None)):
             Diff:
             {hunks_diff[0]}
         """
-        logger.info("Calling groq API model...")
         chat_completion = client.chat.completions.create(
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -199,51 +302,11 @@ def handle_pr_event(payload: dict, x_github_event: str = Header(None)):
             model="openai/gpt-oss-120b",
         )
         response = chat_completion.choices[0].message.content
-        logger.info(f"Response received from LLM: {response}")
+        logger.info("Response received from LLM")
+        data = {"body": f"""{response}"""}
+        requests.post(pr_response["comments_url"], json=data, headers=headers)
 
-        parsed_response = parse_llm_response(response)
-        logger.info("Parsed LLM response for review body content")
-        logger.info(f"Parsed response: {parsed_response}")
-        hunks = hunks_diff[1]
-        commit_id = pr_response["head"]["sha"]
-        for filename, hunks_data in parsed_response.items():
-            for hunks_num, info in hunks_data.items():
-
-                if filename not in hunks:
-                    logger.info(f"Filename {filename} not found in parsed diff hunks..")
-                    continue
-
-                if not info["review"]:
-                    logger.info(f"No review/comment for {filename}")
-                    continue
-                text = info["text"]
-                old_start, old_count = hunks[filename][f"Hunk {hunks_num}"]["old"]
-                new_start, new_count = hunks[filename][f"Hunk {hunks_num}"]["new"]
-
-                if new_count > 0:
-                    side = "RIGHT"
-                    start_line = new_start
-                    end_line = new_start + new_count - 1
-                else:
-                    side = "LEFT"
-                    start_line = old_start
-                    end_line = old_start + old_count - 1
-
-                payload = {
-                    "body": text,
-                    "commit_id": commit_id,
-                    "path": filename,
-                    "start_side": side,
-                    "start_line": start_line,
-                    "line": end_line,
-                    "side": side,
-                }
-                logger.info(f"Posting comment for {filename}'s PR diff.")
-                requests.post(
-                    pr_response["review_comments_url"], json=payload, headers=headers
-                )
-
-        return {"msg": "Review Check Done"}
+        return {"msg": "Summary Done"}
 
 
 # @app.post("/webhook-comment")  # some other endpoint name
@@ -253,43 +316,3 @@ def handle_pr_event(payload: dict, x_github_event: str = Header(None)):
 
 if __name__ == "__main__":
     main()
-
-
-"""
-You are an Code Summarizer. Based on the diffs and context provided by the Pull request with additional details,
-you summarize what the PR is about with formatted description if necessary. Changes would be in a table format & related files can be grouped.
-Based on additional context such as code structure & repository file tree, you generate a Mermaid diagram code which aligns with it only if codebase structure is provided or is accurately understood.
-Some example format: (Can be modified as per summarization need)
-### Title 
-<Concise Description>
-#### Changes
- Files     | Summary 
- --------- | ---------
- <`files`> | <content>
- <`files`> | <content>
-
-Example Format for mermaid diagram:
-```mermaid
-flowchart TD
-    A[Christmas] -->|Get money| B(Go shopping)
-    B --> C{Let me think}
-    C -->|One| D[Laptop]
-    C -->|Two| E[iPhone]
-    C -->|Three| F[fa:fa-car Car]
-```
-"""
-
-
-'''
-    chat_completion = client.chat.completions.create(
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        model="openai/gpt-oss-120b", # other models like -> llama-3.3-70b-versatile
-    )
-    response = chat_completion.choices[0].message.content
-    logger.info("Response received from LLM")
-    data = {"body": f"""{response}"""}
-    requests.post(pr_response["comments_url"], json=data, headers=headers)
-'''
