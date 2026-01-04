@@ -143,17 +143,13 @@ def parse_llm_response(res_txt: str) -> dict:
 
 @app.post("/webhook")  # endpoint for gh webhhook
 def handle_pr_event(payload: dict, x_github_event: str = Header(None)):
-    if x_github_event != "pull_request":
-        logger.info(f"Ignoring event: {x_github_event}")
-        return {"msg": "Ignored- not a PR event"}
 
     if x_github_event == "issue_comment":
-        comment_response = payload["issue_comment"]["issue"]
         if (
-            comment_response["pull_request"]
-            and comment_response["comment"] == "/review"
+            payload["issue"]["pull_request"]
+            and payload["comment"]["body"] == "/review"
         ):
-            pr_url = comment_response["pull_request"]["url"]
+            pr_url = payload["issue"]["pull_request"]["url"]
             pr_info = requests.get(pr_url, headers=headers)
             if pr_info["state"] == "open":
                 try:
@@ -252,61 +248,66 @@ def handle_pr_event(payload: dict, x_github_event: str = Header(None)):
 
             return {"msg": "Review Check Done"}
 
-    pr_response = payload["pull_request"]
-    logger.info("Received Github PR event")
+    elif x_github_event == "pull_request":
+        pr_response = payload["pull_request"]
+        logger.info("Received Github PR event")
 
-    if pr_response["state"] == "open":
-        system_prompt = """You are an Code Summarizer to help Maintainers/Reviewers. Based on the diffs and context provided by the Pull request with additional details,
-            you summarize what the PR is about with formatted description if necessary. Changes would be in a table format & related files can be grouped.
-            Based on additional context such as code structure & repository file tree, you generate a Mermaid diagram code which aligns with it only if codebase structure is provided or is accurately understood.
-            Some example format: (Can be modified as per summarization need)
-            ### Title 
-            <Concise Description>
-            #### Changes
-            Files     | Summary 
-            --------- | ---------
-            <`files`> | <content>
-            <`files`> | <content>
+        if pr_response["state"] == "open":
+            system_prompt = """You are an Code Summarizer to help Maintainers/Reviewers. Based on the diffs and context provided by the Pull request with additional details,
+                you summarize what the PR is about with formatted description if necessary. Changes would be in a table format & related files can be grouped.
+                Based on additional context such as code structure & repository file tree, you generate a Mermaid diagram code which aligns with it only if codebase structure is provided or is accurately understood.
+                Some example format: (Can be modified as per summarization need)
+                ### Title 
+                <Concise Description>
+                #### Changes
+                Files     | Summary 
+                --------- | ---------
+                <`files`> | <content>
+                <`files`> | <content>
 
-            Example Format for mermaid diagram:
-            ```mermaid
-            flowchart TD
-                A[Christmas] -->|Get money| B(Go shopping)
-                B --> C{Let me think}
-                C -->|One| D[Laptop]
-                C -->|Two| E[iPhone]
-                C -->|Three| F[fa:fa-car Car]
-            ```
-        """
+                Example Format for mermaid diagram:
+                ```mermaid
+                flowchart TD
+                    A[Christmas] -->|Get money| B(Go shopping)
+                    B --> C{Let me think}
+                    C -->|One| D[Laptop]
+                    C -->|Two| E[iPhone]
+                    C -->|Three| F[fa:fa-car Car]
+                ```
+            """
 
-        logger.info("Sending a diff request...")
-        diffs = requests.get(pr_response["diff_url"], headers=headers).text
-        logger.info("Received diff")
-        base_commit_filecontent = extract_old_filecontent_diff(
-            diffs, pr_response["base"]["sha"]
-        )
-        logger.info("Base commit file received")
-        hunks_diff = hunks_per_diff(diffs)
-        logger.info(f"Hunks diff response: {hunks_diff}")
-        user_prompt = f"""
-            Context(Base commit Files):
-            {base_commit_filecontent}
-            Diff:
-            {hunks_diff[0]}
-        """
-        chat_completion = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            model="openai/gpt-oss-120b",
-        )
-        response = chat_completion.choices[0].message.content
-        logger.info("Response received from LLM")
-        data = {"body": f"""{response}"""}
-        requests.post(pr_response["comments_url"], json=data, headers=headers)
+            logger.info("Sending a diff request...")
+            diffs = requests.get(pr_response["diff_url"], headers=headers).text
+            logger.info("Received diff")
+            base_commit_filecontent = extract_old_filecontent_diff(
+                diffs, pr_response["base"]["sha"]
+            )
+            logger.info("Base commit file received")
+            hunks_diff = hunks_per_diff(diffs)
+            logger.info(f"Hunks diff response: {hunks_diff}")
+            user_prompt = f"""
+                Context(Base commit Files):
+                {base_commit_filecontent}
+                Diff:
+                {hunks_diff[0]}
+            """
+            chat_completion = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                model="openai/gpt-oss-120b",
+            )
+            response = chat_completion.choices[0].message.content
+            logger.info("Response received from LLM")
+            data = {"body": f"""{response}"""}
+            requests.post(pr_response["comments_url"], json=data, headers=headers)
 
-        return {"msg": "Summary Done"}
+            return {"msg": "Summary Done"}
+        
+    else:
+        logger.info("Ignored - not PR nor Issue Comment event")
+        return {"msg":"Ignored - Not a PR/issue-comment event"}
 
 
 # @app.post("/webhook-comment")  # some other endpoint name
