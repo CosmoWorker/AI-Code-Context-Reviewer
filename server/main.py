@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Header
-from fastapi.middleware.cors import CORSMiddleware
+# from fastapi.middleware.cors import CORSMiddleware
 import os
 import logging
 import requests
@@ -10,7 +10,7 @@ from groq import Groq
 
 load_dotenv()
 app = FastAPI()
-app.add_middleware(CORSMiddleware)
+# app.add_middleware(CORSMiddleware)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -146,12 +146,12 @@ def handle_pr_event(payload: dict, x_github_event: str = Header(None)):
     if x_github_event != "pull_request":
         logger.info(f"Ignoring event: {x_github_event}")
         return {"msg": "Ignored- not a PR event"}
-
+    '''Webhook for PR comments, its for giving review comments'''
     if x_github_event == "issue_comment":
         comment_response = payload["issue_comment"]["issue"]
         if (
             comment_response["pull_request"]
-            and comment_response["comment"] == "/review"
+            and comment_response["comment"].strip() == "/reviewai"
         ):
             pr_url = comment_response["pull_request"]["url"]
             pr_info = requests.get(pr_url, headers=headers)
@@ -255,6 +255,7 @@ def handle_pr_event(payload: dict, x_github_event: str = Header(None)):
     pr_response = payload["pull_request"]
     logger.info("Received Github PR event")
 
+    '''Webhook for Pull request event, It's for Summarization of PR'''
     if pr_response["state"] == "open":
         system_prompt = """You are an Code Summarizer to help Maintainers/Reviewers. Based on the diffs and context provided by the Pull request with additional details,
             you summarize what the PR is about with formatted description if necessary. Changes would be in a table format & related files can be grouped.
@@ -307,11 +308,6 @@ def handle_pr_event(payload: dict, x_github_event: str = Header(None)):
         requests.post(pr_response["comments_url"], json=data, headers=headers)
 
         return {"msg": "Summary Done"}
-
-
-# @app.post("/webhook-comment")  # some other endpoint name
-# def handle_issue_comment_event():
-#     pass
 
 
 if __name__ == "__main__":
