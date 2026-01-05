@@ -143,15 +143,13 @@ def parse_llm_response(res_txt: str) -> dict:
 
 @app.post("/webhook")  # endpoint for gh webhhook
 def handle_pr_event(payload: dict, x_github_event: str = Header(None)):
-
     if x_github_event == "issue_comment":
-        if (
-            payload["issue"]["pull_request"]
-            and payload["comment"]["body"] == "/review"
-        ):
+        if payload["issue"]["pull_request"] and payload["comment"]["body"] == "/review":
             pr_url = payload["issue"]["pull_request"]["url"]
+            logger.info("PR URL from issue_comment payload: ", pr_url)
             pr_info = requests.get(pr_url, headers=headers)
-            if pr_info["state"] == "open":
+            logger.info("Getting PR info...")
+            if pr_info.json()["state"] == "open":
                 try:
                     logger.info("Reading Rules File")
                     with open("rules.txt", "r") as f:
@@ -304,10 +302,10 @@ def handle_pr_event(payload: dict, x_github_event: str = Header(None)):
             requests.post(pr_response["comments_url"], json=data, headers=headers)
 
             return {"msg": "Summary Done"}
-        
+
     else:
         logger.info("Ignored - not PR nor Issue Comment event")
-        return {"msg":"Ignored - Not a PR/issue-comment event"}
+        return {"msg": "Ignored - Not a PR/issue-comment event"}
 
 
 # @app.post("/webhook-comment")  # some other endpoint name
