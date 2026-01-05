@@ -147,9 +147,9 @@ def handle_pr_event(payload: dict, x_github_event: str = Header(None)):
         if payload["issue"]["pull_request"] and payload["comment"]["body"] == "/review":
             pr_url = payload["issue"]["pull_request"]["url"]
             logger.info("PR URL from issue_comment payload: ", pr_url)
-            pr_info = requests.get(pr_url, headers=headers)
+            pr_info = requests.get(pr_url, headers=headers).json()
             logger.info("Getting PR info...")
-            if pr_info.json()["state"] == "open":
+            if pr_info["state"] == "open":
                 try:
                     logger.info("Reading Rules File")
                     with open("rules.txt", "r") as f:
