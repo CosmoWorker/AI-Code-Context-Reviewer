@@ -31,9 +31,9 @@ To use the reviewer with the repository:
     * Content type: application/json
 
     * Select individual events: Pull requests & Issue comments
-2. Open a Pull request
+2. Create a ruleset
+    * Create a `rules.txt` file within repository following preferred guidelines for review; or refer to the existing [rules](https://github.com/CosmoWorker/AI-Code-Context-Reviewer/blob/main/server/rules.txt) in this repo for reference.  
+3. Open a Pull request
     * A structured summary will be automatically generated.
-3. Comment `/review` on a Pull request
+4. Comment `/review` on a Pull request
     * Inline review comments will be generated on the PR diff.
-
-**Note: Currently ruleset is generalized & applied uniformly across all repositories.** 

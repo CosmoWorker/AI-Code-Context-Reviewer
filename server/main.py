@@ -250,7 +250,7 @@ def handle_pr_event(payload: dict, x_github_event: str = Header(None)):
         pr_response = payload["pull_request"]
         logger.info("Received Github PR event")
 
-        if pr_response["state"] == "open":
+        if pr_response["action"] == "opened":
             system_prompt = """You are an Code Summarizer to help Maintainers/Reviewers. Based on the diffs and context provided by the Pull request with additional details,
                 you summarize what the PR is about with formatted description if necessary. Changes would be in a table format & related files can be grouped.
                 Based on additional context such as code structure & repository file tree, you generate a Mermaid diagram code which aligns with it only if codebase structure is provided or is accurately understood.
