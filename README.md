@@ -18,6 +18,27 @@ cd $server
 uv install
 ```
 
+## Architecture Overview
+The following showcases flow diagram of how it functions:
+```mermaid
+flowchart TD
+    A[GitHub Repo]
+    A -- pull_request event --> B[Webhook / API Gateway]
+
+    B --> C
+
+    subgraph WS[Worker Subsystem]
+        C[Serverless Review Worker]
+        D[Context Parser Builder<br/>definitions · calls · tests]
+        E[LLM Review Engine]
+
+        C --> D
+        D --> E
+    end
+
+    E --> F[GitHub Review Comments]
+``` 
+
 ## Current Setup / Installation
 To use the reviewer with the repository:
 1.  Create a GitHub webhook for the repository
