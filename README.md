@@ -1,6 +1,9 @@
 # AI-Code-Context-Reviewer
 An automated code reviewer that reviews & summarizes Pull Requests.
 
+## Features
+* Automated PR review system
+* Custom ruleset defined
 ## Tools / Libraries
 * FastAPI 
 * Groq 

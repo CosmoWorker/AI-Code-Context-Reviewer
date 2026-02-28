@@ -1,5 +1,4 @@
 from fastapi import FastAPI, Header
-from fastapi.middleware.cors import CORSMiddleware
 import os
 import logging
 import requests
@@ -10,7 +9,6 @@ from groq import Groq
 
 load_dotenv()
 app = FastAPI()
-app.add_middleware(CORSMiddleware)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -24,16 +22,7 @@ def main():
     return {"msg": "Hello from code reviewer server"}
 
 
-"""
-Webhook Abstract Response object for pull requests
-{
-  "action": "",
-  "number": "",
-  "pull_request": {},
-  "repository": {},
-  "sender": {}
-}
-"""
+
 headers = {
     "Authorization": f"Bearer {github_token}",
     "X-GitHub-Api-Version": "2022-11-28",
